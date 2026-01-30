@@ -1796,9 +1796,13 @@ joblib.dump(cid2row,cid2row_path,compress=3)
 # resdf = pd.concat([pd.DataFrame(res) for res in results])
 
 # resdf.to_pickle(f'{adir}/fp_cent_mean2.pkl')
+resdf.to_pickle(f'{adir}/fp_cent_mean3.pkl')
 
-n_proc=250
-chunk_size=20
+unique_aids= np.array(list(a.iloc[113240:-7].sample(frac=1).index))
+
+
+n_proc=len(unique_aids)
+chunk_size=1
 maxtasksperchild=200
 ctx_method="fork"
 ctx=get_context(ctx_method)
@@ -1810,6 +1814,61 @@ ctx=get_context(ctx_method)
 # st = time.time()
 # joblib.load(ap_mat_path,mmap_mode="r")
 # print(time.time()-st)
+les2=[len(all_cid_lists[aid]) for aid in unique_aids]
+aid = unique_aids[les2.index(427972)]
+[398859, 398891, 427972, 459289, 544814, 613288, 614711, 615362, 615686]
+
+
+apap=joblib.load(ap_mat_path,mmap_mode="r")
+cid2row = joblib.load(cid2row_path)
+
+
+
+ff = pd.concat([pd.DataFrame(res) for res in results])
+fresdf = pd.concat([fresdf, ff])
+fresdf.to_pickle(f'{adir}/fp_cent_mean.pkl')
+
+def _rows_from_cids(cids):
+	idx=[]
+	get=cid2row.get
+	for c in cids:
+		j=get(c)
+		if j is not None:
+			idx.append(j)
+	if len(idx)==0:
+		return None
+	return np.asarray(idx,dtype=np.int64)
+
+
+aid= 1508602
+aid= 1259374
+aid = 1259310
+aid = 1259422
+aid = 1671190
+aid = 1347041
+aid = 1272365
+
+subs=cid_lists[aid]
+tcds=all_cid_lists[aid]
+t_idx=_rows_from_cids(tcds)
+X=apap[t_idx].astype(np.float32)
+out={"AID":np.full(len(t_idx),aid,dtype=object),"CID":np.asarray(tcds,dtype=object)}
+st = time.time()
+for outcome in subs.index:
+    print(outcome)
+    cids=subs[outcome]
+    s_idx=_rows_from_cids(cids)
+    sap=apap[s_idx].astype(np.float32)
+    ma=mahalanobis_to_group(X,sap)
+    print(f'{time.time()-st}')
+    ka=knn_score_to_group(X,sap)
+    print(f'{time.time()-st}')
+    out[f"{outcome}_mahal_mean"]=np.asarray(ma,dtype=np.float32)
+    out[f"{outcome}_knn_mean"]=np.asarray(ka,dtype=np.float32)
+
+
+print(f'{time.time()-st}')
+unique_aids= np.array(list(a.iloc[113240:-5].sort_values(0, ascending=False).index))
 
 
 tasks=[(i,min(i+chunk_size,len(unique_aids))) for i in range(0,len(unique_aids),chunk_size)]
@@ -2418,6 +2477,10 @@ with open(f'{adir}/aid_ap_stats.pkl', 'wb') as f:
 ap = pd.read_pickle('/spstorage/USERS/gina/Project/FD/assay/pubchem_ap_opt.pkl')
 
 apdf = pd.read_pickle(f'{adir}/aid_ap_stats.pkl')
+
+
+fpdf = pd.read_pickle(f'{adir}/aid_fp_stats.pkl')
+
 testdf = pd.read_pickle(f'{adir}/test_biodf.pkl')
 
 trap = ap[~ap.index.isin(testdf.CID)]
@@ -3034,3 +3097,296 @@ yyy.eval("""
 testfpdf[testfpdf.AID.isin(yyy.AID)][testfpdf[testfpdf.AID.isin(yyy.AID)].Active==1].iloc[:,2:].mean()
 
 testfpdf[testfpdf.AID.isin(yyy.AID)][testfpdf[testfpdf.AID.isin(yyy.AID)].Inactive==1].iloc[:,2:].mean()
+
+
+
+## protein 변환
+
+acc = list(set(bio2['Protein Accessions']))
+unis = list(set(bio2['UniProts IDs']))
+
+import requests
+
+def fetch_ncbi_protein_sequence(acc):
+    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+    params = {
+        "db": "protein",
+        "id": acc,
+        "rettype": "fasta",
+        "retmode": "text"
+    }
+    r = requests.get(url, params=params)
+    if not r.ok:
+        return None
+    return "".join(
+        line.strip() for line in r.text.splitlines()
+        if not line.startswith(">")
+    )
+
+seqs = []
+for i, ac in enumerate(e1+e2):
+    seq = fetch_ncbi_protein_sequence(ac)
+    seqs.append([ac,seq])
+    print(i)
+     
+xx = pd.read_pickle(f'{adir}/ptn_acc.pkl')
+aa = pd.DataFrame(seqs)
+aa.columns = xx.columns
+dfdf = pd.concat([xx,aa])
+dfdf.to_pickle(f'{adir}/ptn_acc.pkl')
+
+
+
+# import requests,time
+
+# def ncbi_to_uniprot(ncbi_acc):
+#     # 1) submit mapping job
+#     url = "https://rest.uniprot.org/idmapping/run"
+#     r = requests.post(url, data={
+#         "from": "RefSeq_Protein",
+#         "to": "UniProtKB",
+#         "ids": ncbi_acc
+#     })
+#     if not r.ok:
+#         return None
+#     job_id = r.json()["jobId"]
+#     # 2) wait for result
+#     status_url = f"https://rest.uniprot.org/idmapping/status/{job_id}"
+#     while True:
+#         s = requests.get(status_url).json()
+#         if s["jobStatus"] == "FINISHED":
+#             break
+#         time.sleep(1)
+#     # 3) fetch result
+#     result_url = f"https://rest.uniprot.org/idmapping/results/{job_id}"
+#     res = requests.get(result_url).json()
+#     if "results" not in res or len(res["results"]) == 0:
+#         return None
+#     return res["results"][0]["to"]  # UniProt ID
+
+
+# def fetch_pdb_chain_sequence(pdb_id, chain_id):
+#     pdb_id = pdb_id.upper()
+#     url = f"https://www.rcsb.org/fasta/entry/{pdb_id}"
+#     r = requests.get(url)
+#     if not r.ok:
+#         return None
+#     seq = ""
+#     record = False
+#     for line in r.text.splitlines():
+#         if line.startswith(">"):
+#             record = f"Chains {chain_id}" in line
+#             seq = ""
+#         elif record:
+#             seq += line.strip()
+#     return seq
+
+# seq = fetch_pdb_chain_sequence("1Y7V", "A")
+
+# import requests,time
+
+def refseq_to_uniprot(refseq_id):
+    # submit job
+    url = "https://rest.uniprot.org/idmapping/run"
+    r = requests.post(url, data={
+        "from": "RefSeq_Protein",
+        "to": "UniProtKB",
+        "ids": refseq_id
+    })
+    if not r.ok:
+        return None
+    job_id = r.json()["jobId"]
+    # poll status
+    status_url = f"https://rest.uniprot.org/idmapping/status/{job_id}"
+    while True:
+        s = requests.get(status_url).json()
+        if s.get("jobStatus") == "FINISHED":
+            break
+        time.sleep(0.5)
+    # fetch result
+    result_url = f"https://rest.uniprot.org/idmapping/results/{job_id}"
+    res = requests.get(result_url).json()
+    if "results" not in res or len(res["results"]) == 0:
+        return None
+    return res["results"][0]["to"]
+
+
+import requests
+
+def pdb_chain_to_uniprot(pdb_id, chain_id):
+    pdb_id = pdb_id.lower()
+    url = f"https://www.ebi.ac.uk/pdbe/api/mappings/uniprot/{pdb_id}"
+    r = requests.get(url)
+    if not r.ok:
+        return None
+    data = r.json()
+    if pdb_id not in data:
+        return None
+    for up_id, info in data[pdb_id]["UniProt"].items():
+        chains = info.get("chains", [])
+        for ch in chains:
+            if ch["chain_id"] == chain_id:
+                return up_id
+    return None
+
+uid = pdb_chain_to_uniprot("1Y7V", "A")
+print(uid)  # 예: P00533 (EGFR)
+
+# UniProt
+
+
+
+### PDB
+
+import requests
+import re
+
+def fetch_pdb_chain_sequence(pdb_id, chain_id):
+    pdb_id = pdb_id.upper()
+    chain_id = chain_id.upper()
+    url = f"https://www.rcsb.org/fasta/entry/{pdb_id}"
+    r = requests.get(url)
+    if not r.ok:
+        return None
+    seq = ""
+    record = False
+    for line in r.text.splitlines():
+        if line.startswith(">"):
+            record = False
+            seq = ""
+            # Chains part 추출
+            m = re.search(r"Chains?\s+([A-Za-z0-9,\s]+)", line)
+            if m:
+                chains_str = m.group(1)
+                # "A, B" / "A,B" / "A and B" → ["A","B"]
+                chains_str = chains_str.replace("and", ",")
+                chains = [c.strip() for c in chains_str.split(",") if c.strip()]
+                if chain_id in chains:
+                    record = True
+        elif record:
+            seq += line.strip()
+    return seq if seq else None
+
+seqq = []
+
+for i, ac in enumerate(xxx):
+     print(i)
+     if not pd.isna(ac):
+        if is_pdb_chain(ac):
+            seqq.append([ac, fetch_pdb_chain_sequence(ac[0:4], ac[5])])
+
+
+
+seq = fetch_pdb_chain_sequence("1Y7V", "A")
+
+import re
+
+PDB_CHAIN_PATTERN = re.compile(r"^[0-9A-Za-z]{4}_[A-Za-z0-9]$")
+
+NP_CHAIN_PATTERN = re.compile(r"^NP_[0-9]+")
+
+
+UNIPROT_PATTERN = re.compile(
+    r"^(?:[A-Z][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9][A-Z0-9]{8})$"
+)
+def is_pdb_chain(acc):
+    if acc is None:
+        return False
+    return bool(
+        NP_CHAIN_PATTERN.match(acc)
+        or PDB_CHAIN_PATTERN.match(acc)
+        or UNIPROT_PATTERN.match(acc)
+    )
+
+df[df.iloc[:, 1].astype(str).str.startswith("Error")]
+
+
+cc3= [a for a in acc2 if not is_pdb_chain(a)]
+len(cc3)
+
+
+import requests
+
+def fetch_ncbi_protein_sequence(acc, api_key=None):
+    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+    params = {
+        "db": "protein",
+        "id": acc,
+        "rettype": "fasta",
+        "retmode": "text"
+    }
+    if api_key is not None:
+        params["api_key"] = api_key
+    r = requests.get(url, params=params, timeout=10)
+    if not r.ok:
+        return None
+    seq = "".join(
+        line.strip()
+        for line in r.text.splitlines()
+        if not line.startswith(">")
+    )
+    return seq or None
+
+
+### AAA
+
+adir = '/spstorage/USERS/gina/Project/FD/assay/'
+
+
+adf = pd.read_pickle(f'{adir}/all_simdf.pkl')
+
+testdf = pd.read_pickle(f'{adir}/test_biodf.pkl')
+
+X_train = adf[~adf.CID.isin(testdf.CID)].iloc[:,list(range(2,18))].sample(frac=1, random_state=7)
+y_train = adf[~adf.CID.isin(testdf.CID)]['Active']
+
+X_test = adf[adf.CID.isin(testdf.CID)].iloc[:,list(range(2,18))].sample(frac=1, random_state=7)
+y_test = adf[adf.CID.isin(testdf.CID)]['Active']
+
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+from sklearn.metrics import roc_auc_score
+
+# X_train, y_train, X_test, y_test, feature_names 전제
+train_data = lgb.Dataset(X_train, label=y_train, feature_name=feature_names)
+valid_data = lgb.Dataset(X_test, label=y_test, reference=train_data, feature_name=feature_names)
+
+params = {
+    "objective": "binary",
+    "metric": "auc",
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "max_depth": -1,
+    "feature_fraction": 0.9,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 1,
+    "verbose": -1,
+    "seed": 42
+}
+
+lgbm = lgb.train(
+    params,
+    train_data,
+    num_boost_round=500,
+    valid_sets=[valid_data],
+    early_stopping_rounds=50,
+    verbose_eval=50
+)
+
+y_pred = lgbm.predict(X_test, num_iteration=lgbm.best_iteration)
+auc = roc_auc_score(y_test, y_pred)
+print("LightGBM AUC:", auc)
+
+# feature importance (gain 기준 추천)
+gain_importance = lgbm.feature_importance(importance_type="gain")
+split_importance = lgbm.feature_importance(importance_type="split")
+
+fi_df = pd.DataFrame({
+    "feature": feature_names,
+    "gain_importance": gain_importance,
+    "split_importance": split_importance
+}).sort_values("gain_importance", ascending=False)
+
+print(fi_df)
