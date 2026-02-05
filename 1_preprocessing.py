@@ -3124,7 +3124,7 @@ def fetch_ncbi_protein_sequence(acc):
     )
 
 seqs = []
-for i, ac in enumerate(e1+e2):
+for i, ac in enumerate(accs[1053:]):
     seq = fetch_ncbi_protein_sequence(ac)
     seqs.append([ac,seq])
     print(i)
@@ -3269,7 +3269,7 @@ def fetch_pdb_chain_sequence(pdb_id, chain_id):
 
 seqq = []
 
-for i, ac in enumerate(xxx):
+for i, ac in enumerate(accs):
      print(i)
      if not pd.isna(ac):
         if is_pdb_chain(ac):
@@ -3349,6 +3349,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
+feature_names = X_train.columns.tolist()
 # X_train, y_train, X_test, y_test, feature_names 전제
 train_data = lgb.Dataset(X_train, label=y_train, feature_name=feature_names)
 valid_data = lgb.Dataset(X_test, label=y_test, reference=train_data, feature_name=feature_names)
@@ -3371,8 +3372,8 @@ lgbm = lgb.train(
     train_data,
     num_boost_round=500,
     valid_sets=[valid_data],
-    early_stopping_rounds=50,
-    verbose_eval=50
+    #early_stopping_rounds=50,
+    #verbose_eval=50
 )
 
 y_pred = lgbm.predict(X_test, num_iteration=lgbm.best_iteration)
@@ -3390,3 +3391,161 @@ fi_df = pd.DataFrame({
 }).sort_values("gain_importance", ascending=False)
 
 print(fi_df)
+
+with open(f'{adir}/temp.pkl', 'wb') as f:
+    pickle.dump(accs, f)
+
+with open(f'{adir}/temp.pkl', 'rb') as f:
+    accs = pickle.load(f)
+
+
+
+
+
+
+accdf = pd.read_pickle(f'{adir}/')
+
+nbiodf2 = bio2[pd.isna(bio2.iloc[:,3])]
+abiodf2 = bio2[~pd.isna(bio2.iloc[:,3])]
+
+abiodf2 = bio2[~pd.isna(bio2.iloc[:,3])]
+
+adfdf = pd.merge(abiodf2, a1, left_on = 'Protein Accession', right_on = 'ACC')
+
+abiodf2 = bio2[~pd.isna(bio2.iloc[:,3])]
+nbiodf2 = bio2[pd.isna(bio2.iloc[:,3])]
+
+biodf2 = pd.read_pickle(f'{adir}/sub_biodf2.pkl')
+
+bb=bio2[~pd.isna(bio2.iloc[:,3])]
+
+
+bbb=bb[bb.iloc[:,3].isin(a1.ACC)]
+accs = list(set(bb.iloc[:,3])-set(bbb.iloc[:,3]))
+
+e1 = adf[adf.iloc[:, 1].astype(str).str.startswith("Error")]
+e2 = adf[pd.isna(adf.iloc[:, 1])]
+ne = adf[~(adf.iloc[:, 1].astype(str).str.startswith("Error")) & ~pd.isna(adf.iloc[:, 1])]
+
+ne.to_pickle(f'{adir}/alldf_pivot.pkl')
+
+
+####
+
+# biodf2 =  
+biodf2 = pd.read_pickle(f'{adir}/sub_biodf2.pkl')
+aid2seq = pd.read_pickle(f'{adir}/alldf_pivot.pkl')
+
+abio2 = bio2[~pd.isna(bio2['Protein Accessions'])]
+
+laids = list(set(abiodf2['Protein Accession']) - set(aid2seq['ACC']))
+
+pd.merge(bio2, aid2seq, left_on = 'Protein Accessions', right_on = 'ACC')
+
+### data preprocessing
+
+biodf2 = pd.read_pickle(f'{adir}/sub_biodf2.pkl')
+aid2seq = pd.read_pickle(f'{adir}/alldf_pivot.pkl')
+apdf = pd.read_pickle(f'{adir}/pubchem_ap_opt.pkl')
+smidf = pd.read_pickle(f'{adir}/pubchem_smiles_opt.pkl')
+
+
+
+# 1) biodf2: pair / label 테이블
+biodf2 = pd.read_pickle(f'{adir}/sub_biodf2.pkl')
+
+# 2) aid2seq: Protein Accession -> SEQ
+aid2seq = pd.read_pickle(f'{adir}/alldf_pivot.pkl')
+aid2seq.columns =['Protein Accession','SEQ']
+
+aid2seq = aid2seq.set_index("Protein Accession")  # 나중에 .loc로 바로 검색
+
+# 3) apdf: CID index, 550 AP columns
+apdf = pd.read_pickle(f'{adir}/pubchem_ap_opt.pkl')
+# apdf.index: CID
+
+# 4) smidf: CID index, smiles column
+smidf = pd.read_pickle(f'{adir}/pubchem_smiles_opt.pkl')
+# smidf.index: CID
+valid_cids = apdf.index.intersection(smidf.index)
+biodf2 = biodf2[biodf2["CID"].isin(valid_cids)].reset_index(drop=True)
+
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import Dataset
+
+class Chem2AssayDataset(Dataset):
+    def __init__(self,biodf2,aid2seq,apdf,smidf,assay_text_df=None):
+        self.df=biodf2.reset_index(drop=True)
+        self.aid2seq=aid2seq.set_index("Protein Accession") if "Protein Accession" in aid2seq.columns else aid2seq
+        self.apdf=apdf
+        self.smidf=smidf
+        self.assay_text_df=assay_text_df
+    def __len__(self):
+        return len(self.df)
+    def __getitem__(self,idx):
+        r=self.df.iloc[idx]
+        cid=r["CID"]
+        aid=r["AID"]
+        prot=r["Protein Accession"]
+        smiles=self.smidf.loc[cid,"smiles"]
+        ap_vec=self.apdf.loc[cid].values.astype(np.float32)
+        assay_text=self.assay_text_df.loc[aid,"assay_text"] if self.assay_text_df is not None and aid in self.assay_text_df.index else f"Assay {aid}"
+        target_seq=self.aid2seq.loc[prot,"SEQ"] if prot in self.aid2seq.index else None
+        return {"smiles":smiles,"assay_text":assay_text,"target_seq":target_seq,"ap_vec":ap_vec,"assay_cont":None,"label":float(r["Activity Outcome"]),"aux_sim":None}
+
+
+chem_tok = AutoTokenizer.from_pretrained(args.chemberta_name)
+assay_tok = AutoTokenizer.from_pretrained(args.assay_model_name)
+
+collate_fn = make_collate_fn(
+    chem_tok,
+    assay_tok,
+    use_assay_cont=False,          # assay_cont가 없으니까
+    use_aux_sim=args.use_aux_sim_head
+)
+
+dataset = Chem2AssayDataset(
+    biodf2=biodf2,
+    aid2seq=aid2seq,
+    apdf=apdf,
+    smidf=smidf,
+    assay_text_df=None   # 나중에 AID→설명 df 생기면 여기 넣기
+)
+
+sampler = DistributedSampler(dataset, shuffle=True)
+
+loader = DataLoader(
+    dataset,
+    batch_size=args.batch_size,
+    sampler=sampler,
+    num_workers=args.num_workers,
+    pin_memory=True,
+    collate_fn=collate_fn
+)
+
+
+with autocast():
+    out = model(
+        smiles_inputs=batch["smiles_inputs"],
+        ap_vec=batch["ap_vec"],
+        assay_inputs=batch["assay_inputs"],
+        target_seqs=batch["target_seqs"],
+        assay_cont_vec=batch["assay_cont_vec"],
+        labels=batch["labels"],
+        aux_similarity_targets=batch["aux_similarity_targets"],
+        return_embeddings=False
+    )
+
+
+
+biodf2=pd.read_pickle(f'{adir}/sub_biodf2.pkl')
+aid2seq=pd.read_pickle(f'{adir}/alldf_pivot.pkl')
+apdf=pd.read_pickle(f'{adir}/pubchem_ap_opt.pkl')
+smidf=pd.read_pickle(f'{adir}/pubchem_smiles_opt.pkl')
+valid_cids=apdf.index.intersection(smidf.index)
+biodf2=biodf2[biodf2["CID"].isin(valid_cids)].reset_index(drop=True)
+dataset=Chem2AssayDataset(biodf2,aid2seq,apdf,smidf)
+print(len(dataset))
+print(dataset[0])
