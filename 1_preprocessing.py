@@ -3549,3 +3549,96 @@ biodf2=biodf2[biodf2["CID"].isin(valid_cids)].reset_index(drop=True)
 dataset=Chem2AssayDataset(biodf2,aid2seq,apdf,smidf)
 print(len(dataset))
 print(dataset[0])
+
+
+
+## SMIlES similarity
+from rdkit import Chem
+from rdkit.Chem import AllChem, DataStructs
+import numpy as np
+import time
+
+def smiles_similarity_matrix(smiles_list, radius=2, n_bits=2048):
+    mols = [Chem.MolFromSmiles(s) for s in smiles_list]
+    fps = [
+        AllChem.GetMorganFingerprintAsBitVect(m, radius, nBits=n_bits)
+        for m in mols
+    ]
+    n = len(fps)
+    sim_matrix = np.zeros((n, n))
+    for i in range(n):
+        sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps)
+        sim_matrix[i, :] = sims
+    return sim_matrix
+
+
+smidf = pd.read_pickle(f'{adir}/pubchem_smiles.pkl')
+
+smiles_list = unique(smidf['scaffold'].tolist())
+
+smidf = smidf[~(smidf.scaffold=='[c-]1cccc1')]
+
+
+testscf = smidf[smidf.index.isin(testdf.CID)]['scaffold'].unique()
+
+trainscf = smidf[~smidf.index.isin(testdf.CID)]['scaffold'].unique()
+
+from rdkit import Chem, DataStructs
+from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
+import numpy as np
+
+def smiles_similarity_matrix_1v2(
+    smiles_list_1,
+    smiles_list_2,
+    radius=2,
+    n_bits=2048,
+    dtype=np.float32,
+):
+    gen = GetMorganGenerator(radius=radius, fpSize=n_bits)
+    mols1 = [Chem.MolFromSmiles(s) for s in smiles_list_1]
+    mols2 = [Chem.MolFromSmiles(s) for s in smiles_list_2]
+    fps1 = [gen.GetFingerprint(m) for m in mols1]
+    fps2 = [gen.GetFingerprint(m) for m in mols2]
+    n1, n2 = len(fps1), len(fps2)
+    sim = np.zeros((n1, n2), dtype=dtype)
+    for i, fp in enumerate(fps1):
+        sim[i, :] = DataStructs.BulkTanimotoSimilarity(fp, fps2)
+    return sim
+
+
+st = time.time()
+
+sim_1v2 = smiles_similarity_matrix_1v2(trainscf, testscf)
+print("Time taken:", time.time() - st)
+
+
+pd.DataFrame(sim_1v2, index=trainscf, columns=testscf).to_pickle(f'{adir}/smiles_sim_train_test.pkl')
+
+
+st = time.time()
+sim_matrix = smiles_similarity_matrix(smiles_list)
+print("Time taken:", time.time() - st)
+
+
+# from rdkit import Chem, DataStructs
+# from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
+# import numpy as np
+
+# def smiles_similarity_matrix(
+#     smiles_list,
+#     radius=2,
+#     n_bits=2048,
+#     use_chirality=False
+# ):
+#     mols = [Chem.MolFromSmiles(s) for s in smiles_list]
+#     generator = GetMorganGenerator(
+#         radius=radius,
+#         fpSize=n_bits,
+#         useChirality=use_chirality
+#     )
+#     fps = [generator.GetFingerprint(m) for m in mols]
+#     n = len(fps)
+#     sim_matrix = np.zeros((n, n), dtype=float)
+#     for i in range(n):
+#         sim_matrix[i] = DataStructs.BulkTanimotoSimilarity(fps[i], fps)
+#     return sim_matrix

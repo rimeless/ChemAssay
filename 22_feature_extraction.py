@@ -18,7 +18,7 @@ from rdkit.Chem import AllChem, ChemicalFeatures
 from rdkit import RDConfig
 PHARMA_FAMILIES = ["Donor","Acceptor","Aromatic","PosIonizable","NegIonizable","Hydrophobe","ZnBinder"]
 _PHARMA_FAMILY_TO_IDX = {name:i for i,name in enumerate(PHARMA_FAMILIES)}
-def _get_feature_factory() -> ChemicalFeatures.FreeChemicalFeatureFactory:
+def _get_feature_factory() -> ChemicalFeatures.FreeChemicalFeature:
     fdef_name = os.path.join(RDConfig.RDDataDir,"BaseFeatures.fdef")
     factory = ChemicalFeatures.BuildFeatureFactory(fdef_name)
     return factory
