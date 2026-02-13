@@ -58,7 +58,6 @@ class LabelWithConfidence:
     p_positive: float
     p_negative: float
     p_unknown: float  # Inconclusive에 해당
-
     include_in_training: bool = True   # 학습에 포함할지
     apply_pu: bool = False            # PU learning 적용할지 (true unlabeled만)
 
@@ -73,14 +72,11 @@ class ModelConfig:
     compound_dim: int = 768      # ChemBERTa CLS dim
     assay_text_dim: int = 768    # SciBERT CLS dim
     target_dim: int = 1280       # ESM-2 pooled dim
-
     # Latent
     latent_dim: int = 512
     num_prototypes: int = 256
-
     # Prototype / prior 기타
     prototype_momentum: float = 0.9
-
     # Contrastive (InfoNCE)
     temperature: float = 0.07
     contrastive_weight: float = 0.2   # 전체 loss 중 대조학습 비중
@@ -94,7 +90,6 @@ class LabelConfidenceAssigner:
     """
     원본 라벨 + 메타데이터를 기반으로 confidence 할당
     """
-
     def __init__(
         self,
         # Confirmatory assay confidence
@@ -113,7 +108,6 @@ class LabelConfidenceAssigner:
         self.screen_neg_without_val = screening_neg_without_value
         self.strong_neg_thresh = strong_negative_threshold
         self.weak_neg_thresh = weak_negative_threshold
-
     def assign_confidence(
         self,
         original_label: int,
@@ -125,7 +119,6 @@ class LabelConfidenceAssigner:
         """
         샘플별 confidence 할당
         """
-
         # Unspecified → Exclude
         if original_label == OriginalLabel.UNSPECIFIED:
             return LabelWithConfidence(
@@ -135,7 +128,6 @@ class LabelConfidenceAssigner:
                 include_in_training=False,
                 apply_pu=False
             )
-
         # Positive → High confidence positive
         if original_label == OriginalLabel.POSITIVE:
             return LabelWithConfidence(
@@ -145,7 +137,6 @@ class LabelConfidenceAssigner:
                 include_in_training=True,
                 apply_pu=False
             )
-
         # Inconclusive → True unlabeled (PU learning)
         if original_label == OriginalLabel.INCONCLUSIVE:
             return LabelWithConfidence(
@@ -155,15 +146,12 @@ class LabelConfidenceAssigner:
                 include_in_training=True,
                 apply_pu=True
             )
-
         # Negative → confidence depends on assay type & activity value
         if original_label == OriginalLabel.NEGATIVE:
             return self._assign_negative_confidence(
                 assay_type, has_activity_value, activity_value, multi_dose_tested
             )
-
         raise ValueError(f"Unknown label: {original_label}")
-
     def _assign_negative_confidence(
         self,
         assay_type: int,
@@ -175,13 +163,11 @@ class LabelConfidenceAssigner:
         Negative 샘플의 confidence 계산
         """
         is_confirmatory = (assay_type == AssayType.CONFIRMATORY)
-
         # Base confidence by assay type and value availability
         if is_confirmatory:
             base_conf = self.conf_neg_with_val if has_activity_value else self.conf_neg_without_val
         else:  # Screening or Unknown
             base_conf = self.screen_neg_with_val if has_activity_value else self.screen_neg_without_val
-
         # Activity value로 조정 (있을 때만)
         if has_activity_value and activity_value is not None:
             if activity_value > self.strong_neg_thresh:
@@ -190,18 +176,14 @@ class LabelConfidenceAssigner:
                 value_boost = 0.05
             else:
                 value_boost = -0.10
-
             base_conf = min(0.98, max(0.2, base_conf + value_boost))
-
         # Multi-dose면 조금 더 신뢰
         if multi_dose_tested:
             base_conf = min(0.98, base_conf + 0.05)
-
         # Soft labels
         p_negative = base_conf
         p_positive = (1 - base_conf) * 0.3
         p_unknown = (1 - base_conf) * 0.7
-
         return LabelWithConfidence(
             p_positive=p_positive,
             p_negative=p_negative,
@@ -219,11 +201,9 @@ class ConfidenceWeightedBCELoss(nn.Module):
     """
     Confidence에 따라 가중치를 부여하는 BCE Loss
     """
-
     def __init__(self, min_weight: float = 0.1):
         super().__init__()
         self.min_weight = min_weight
-
     def forward(
         self,
         logits: torch.Tensor,          # (B,)
@@ -231,16 +211,12 @@ class ConfidenceWeightedBCELoss(nn.Module):
         confidences: torch.Tensor      # (B,)
     ) -> torch.Tensor:
         probs = torch.sigmoid(logits)
-
         p_pos = soft_labels[:, 1]
         p_neg = soft_labels[:, 0]
-
         eps = 1e-7
         loss = -(p_pos * torch.log(probs + eps) + p_neg * torch.log(1 - probs + eps))
-
         weights = torch.clamp(confidences, min=self.min_weight)
         weighted_loss = loss * weights
-
         return weighted_loss.mean()
 
 
@@ -254,14 +230,12 @@ class SemiPULoss(nn.Module):
     - Supervised: positive + confident negative
     - PU: inconclusive (true unlabeled)
     """
-
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config
         self.supervised_loss = ConfidenceWeightedBCELoss(min_weight=0.1)
         self.pu_beta = 0.0
         self.pu_gamma = 1.0
-
     def forward(
         self,
         logits: torch.Tensor,
@@ -271,12 +245,9 @@ class SemiPULoss(nn.Module):
         assay_priors: torch.Tensor      # (B,)
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         metrics: Dict[str, float] = {}
-
         supervised_mask = ~apply_pu_mask
         pu_mask = apply_pu_mask
-
         total_loss = torch.tensor(0.0, device=logits.device)
-
         # 1) Supervised
         if supervised_mask.sum() > 0:
             sup_loss = self.supervised_loss(
@@ -286,7 +257,6 @@ class SemiPULoss(nn.Module):
             )
             total_loss = total_loss + sup_loss
             metrics['supervised_loss'] = sup_loss.item()
-
         # 2) PU
         if pu_mask.sum() > 0:
             pu_loss = self._compute_pu_loss(
@@ -294,10 +264,8 @@ class SemiPULoss(nn.Module):
             )
             total_loss = total_loss + pu_loss
             metrics['pu_loss'] = pu_loss.item()
-
         metrics['total_loss'] = total_loss.item()
         return total_loss, metrics
-
     def _compute_pu_loss(
         self,
         logits: torch.Tensor,
@@ -307,9 +275,7 @@ class SemiPULoss(nn.Module):
         assay_priors: torch.Tensor
     ) -> torch.Tensor:
         probs = torch.sigmoid(logits)
-
         positive_mask = supervised_mask & (soft_labels[:, 1] > 0.5)
-
         if positive_mask.sum() > 0:
             pos_loss = F.binary_cross_entropy(
                 probs[positive_mask],
@@ -318,7 +284,6 @@ class SemiPULoss(nn.Module):
             )
         else:
             pos_loss = torch.tensor(0.0, device=logits.device)
-
         if pu_mask.sum() > 0:
             unlabeled_neg_loss = F.binary_cross_entropy(
                 probs[pu_mask],
@@ -327,7 +292,6 @@ class SemiPULoss(nn.Module):
             )
         else:
             unlabeled_neg_loss = torch.tensor(0.0, device=logits.device)
-
         if positive_mask.sum() > 0:
             pos_neg_loss = F.binary_cross_entropy(
                 probs[positive_mask],
@@ -336,16 +300,12 @@ class SemiPULoss(nn.Module):
             )
         else:
             pos_neg_loss = torch.tensor(0.0, device=logits.device)
-
         mean_prior = assay_priors[pu_mask].mean() if pu_mask.sum() > 0 else torch.tensor(0.1, device=logits.device)
-
         neg_risk = unlabeled_neg_loss - mean_prior * pos_neg_loss
-
         if neg_risk < self.pu_beta:
             pu_loss = mean_prior * pos_loss - self.pu_gamma * neg_risk
         else:
             pu_loss = mean_prior * pos_loss + neg_risk
-
         return pu_loss
 
 
@@ -357,7 +317,6 @@ class ActivityValueEncoder(nn.Module):
     """
     Activity value(IC50, EC50 등)를 soft label로 변환
     """
-
     def __init__(
         self,
         positive_threshold: float = 1.0,    # IC50 < 1μM → positive
@@ -368,7 +327,6 @@ class ActivityValueEncoder(nn.Module):
         self.pos_thresh = positive_threshold
         self.neg_thresh = negative_threshold
         self.log_transform = log_transform
-
     def forward(
         self,
         activity_values: torch.Tensor,  # (B,) in μM
@@ -376,15 +334,11 @@ class ActivityValueEncoder(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         B = activity_values.size(0)
         device = activity_values.device
-
         soft_labels = torch.full((B, 2), 0.5, device=device)
         confidence = torch.zeros(B, device=device)
-
         if has_value.sum() == 0:
             return soft_labels, confidence
-
         values = activity_values[has_value]
-
         if self.log_transform:
             values = torch.log10(values.clamp(min=1e-3))
             pos_thresh = np.log10(self.pos_thresh)
@@ -392,19 +346,14 @@ class ActivityValueEncoder(nn.Module):
         else:
             pos_thresh = self.pos_thresh
             neg_thresh = self.neg_thresh
-
         normalized = (values - pos_thresh) / (neg_thresh - pos_thresh + 1e-6)
         normalized = normalized.clamp(0, 1)
-
         p_positive = 1 - normalized
         p_negative = normalized
-
         conf = 2 * torch.abs(normalized - 0.5)
-
         soft_labels[has_value, 0] = p_negative
         soft_labels[has_value, 1] = p_positive
         confidence[has_value] = conf
-
         return soft_labels, confidence
 
 
@@ -416,7 +365,6 @@ class CompoundEncoder(nn.Module):
     """
     Compound structure encoder using pretrained ChemBERTa
     """
-
     def __init__(self, config: ModelConfig, model_name: str = "seyonec/ChemBERTa-zinc-base-v1"):
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name)
@@ -426,7 +374,6 @@ class CompoundEncoder(nn.Module):
             nn.GELU(),
             nn.Linear(config.latent_dim, config.latent_dim)
         )
-
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         compound_repr = outputs.last_hidden_state[:, 0, :]
@@ -437,7 +384,6 @@ class AssayTextEncoder(nn.Module):
     """
     Assay description encoder using SciBERT
     """
-
     def __init__(self, config: ModelConfig, model_name: str = "allenai/scibert_scivocab_uncased"):
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name)
@@ -447,7 +393,6 @@ class AssayTextEncoder(nn.Module):
             nn.GELU(),
             nn.Linear(config.latent_dim, config.latent_dim)
         )
-
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         assay_repr = outputs.last_hidden_state[:, 0, :]
@@ -459,7 +404,6 @@ class TargetEncoder(nn.Module):
     Protein target encoder using ESM-2
     - has_target=False → learnable no_target embedding 사용
     """
-
     def __init__(self, config: ModelConfig, model_name: str = "facebook/esm2_t33_650M_UR50D"):
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name)
@@ -470,7 +414,6 @@ class TargetEncoder(nn.Module):
             nn.Linear(config.latent_dim, config.latent_dim)
         )
         self.no_target_embedding = nn.Parameter(torch.randn(config.latent_dim))
-
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
@@ -480,11 +423,9 @@ class TargetEncoder(nn.Module):
         if has_target is None:
             batch_size = input_ids.size(0)
             return self.no_target_embedding.unsqueeze(0).expand(batch_size, -1)
-
         B = has_target.size(0)
         device = has_target.device
         out = torch.zeros(B, self.no_target_embedding.size(0), device=device)
-
         if has_target.any():
             target_outputs = self.encoder(
                 input_ids=input_ids[has_target],
@@ -492,10 +433,8 @@ class TargetEncoder(nn.Module):
             )
             target_repr = target_outputs.last_hidden_state.mean(dim=1)
             out[has_target] = self.projector(target_repr)
-
         if (~has_target).any():
             out[~has_target] = self.no_target_embedding.unsqueeze(0).expand((~has_target).sum(), -1)
-
         return out
 
 
@@ -511,7 +450,6 @@ class GatedFusion(nn.Module):
             nn.Sigmoid()
         )
         self.transform = nn.Linear(dim * 2, dim)
-
     def forward(self, text_repr: torch.Tensor, target_repr: torch.Tensor) -> torch.Tensor:
         combined = torch.cat([text_repr, target_repr], dim=-1)
         gate = self.gate(combined)
@@ -523,7 +461,6 @@ class AssayContextAggregator(nn.Module):
     """
     Assay text + target representation → unified assay_repr
     """
-
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.cross_attention = nn.MultiheadAttention(
@@ -534,7 +471,6 @@ class AssayContextAggregator(nn.Module):
         )
         self.gated_fusion = GatedFusion(config.latent_dim)
         self.norm = nn.LayerNorm(config.latent_dim)
-
     def forward(
         self,
         assay_text_repr: torch.Tensor,  # (B, D)
@@ -547,12 +483,9 @@ class AssayContextAggregator(nn.Module):
             value=target_repr.unsqueeze(1)
         )
         attn_output = attn_output.squeeze(1)
-
         fused = self.gated_fusion(assay_text_repr, attn_output)
-
         mask = has_target.float().unsqueeze(-1)
         output = mask * fused + (1 - mask) * assay_text_repr
-
         return self.norm(output)
 
 
@@ -560,21 +493,17 @@ class AssayPrototypeLayer(nn.Module):
     """
     Learnable assay prototypes (long-tail용)
     """
-
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.num_prototypes = config.num_prototypes
         self.latent_dim = config.latent_dim
-
         self.prototypes = nn.Parameter(torch.randn(self.num_prototypes, self.latent_dim))
         nn.init.xavier_uniform_(self.prototypes)
-
         self.assignment_net = nn.Sequential(
             nn.Linear(self.latent_dim, self.latent_dim),
             nn.GELU(),
             nn.Linear(self.latent_dim, self.num_prototypes)
         )
-
     def forward(self, assay_repr: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         logits = self.assignment_net(assay_repr)
         assignments = F.softmax(logits / 0.1, dim=-1)
@@ -594,16 +523,13 @@ class AssayPriorEstimator(nn.Module):
     - assay_repr 기반 prior predictor
     - learnable per-assay prior
     """
-
     def __init__(self, config: ModelConfig, num_assays: int):
         super().__init__()
         self.config = config
         self.num_assays = num_assays
-
         # observed stats
         self.register_buffer('observed_positive_ratio', torch.zeros(num_assays))
         self.register_buffer('assay_sample_counts', torch.zeros(num_assays))
-
         # assay_repr → prior
         self.prior_predictor = nn.Sequential(
             nn.Linear(config.latent_dim, 256),
@@ -615,17 +541,13 @@ class AssayPriorEstimator(nn.Module):
             nn.Linear(64, 1),
             nn.Sigmoid()
         )
-
         # learnable per-assay prior
         self.learnable_logit_prior = nn.Parameter(
             torch.zeros(num_assays) - 2.0  # sigmoid(-2) ≈ 0.12
         )
-
         self.min_prior = 0.001
         self.max_prior = 0.5
-
         self.strategy_weights = nn.Parameter(torch.tensor([0.3, 0.4, 0.3]))
-
     def update_observed_ratios(self, assay_ids: torch.Tensor, pos_flags: torch.Tensor):
         """
         pos_flags: 1 = positive, 0 = not-positive (neg+inconc)
@@ -638,7 +560,6 @@ class AssayPriorEstimator(nn.Module):
                 new_ratio = (current_ratio * count + float(label)) / new_count
                 self.observed_positive_ratio[aid] = new_ratio
                 self.assay_sample_counts[aid] = new_count
-
     def forward(
         self,
         assay_ids: torch.Tensor,
@@ -648,7 +569,6 @@ class AssayPriorEstimator(nn.Module):
         observed_priors = self.observed_positive_ratio[assay_ids]
         predicted_priors = self.prior_predictor(assay_repr).squeeze(-1)
         learnable_priors = torch.sigmoid(self.learnable_logit_prior[assay_ids])
-
         weights = F.softmax(self.strategy_weights, dim=0)
         sample_counts = self.assay_sample_counts[assay_ids]
         confidence = torch.clamp(sample_counts / 1000.0, 0, 1)
@@ -659,7 +579,6 @@ class AssayPriorEstimator(nn.Module):
             weights[2] * learnable_priors * confidence +
             (1 - confidence) * weights[0] * predicted_priors
         )
-
         combined_prior = torch.clamp(combined_prior, self.min_prior, self.max_prior)
         return combined_prior
 
@@ -738,18 +657,15 @@ class AssayCompoundModelWithConfidencePU(nn.Module):
     """
     Confidence-weighted Semi-PU Learning 통합 모델 (InfoNCE 포함)
     """
-
     def __init__(self, config: ModelConfig, num_assays: int):
         super().__init__()
         self.config = config
-
         # Encoders & aggregator
         self.compound_encoder = CompoundEncoder(config)
         self.assay_text_encoder = AssayTextEncoder(config)
         self.target_encoder = TargetEncoder(config)
         self.assay_aggregator = AssayContextAggregator(config)
         self.prototype_layer = AssayPrototypeLayer(config)
-
         # Interaction
         self.interaction = nn.Sequential(
             nn.Linear(config.latent_dim * 3, config.latent_dim),
@@ -759,25 +675,20 @@ class AssayCompoundModelWithConfidencePU(nn.Module):
             nn.Linear(config.latent_dim, config.latent_dim // 2),
             nn.GELU()
         )
-
         # Binary classifier (positive logit)
         self.classifier = nn.Linear(config.latent_dim // 2, 1)
-
         # Contrastive Projection Head (for InfoNCE)
         self.contrastive_proj = nn.Sequential(
             nn.Linear(config.latent_dim, config.latent_dim),
             nn.GELU(),
             nn.Linear(config.latent_dim, 128)   # 128-d projection
         )
-
         # Confidence & Prior
         self.label_assigner = LabelConfidenceAssigner()
         self.activity_encoder = ActivityValueEncoder()
         self.prior_estimator = AssayPriorEstimator(config, num_assays)
-
         # Loss
         self.loss_fn = SemiPULoss(config)
-
     def forward(
         self,
         compound_input_ids: torch.Tensor,
@@ -794,21 +705,16 @@ class AssayCompoundModelWithConfidencePU(nn.Module):
         target_attention_mask: Optional[torch.Tensor] = None,
         has_target: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-
         B = compound_input_ids.size(0)
         device = compound_input_ids.device
-
         # Encoding
         compound_repr = self.compound_encoder(compound_input_ids, compound_attention_mask)
         assay_text_repr = self.assay_text_encoder(assay_input_ids, assay_attention_mask)
-
         if has_target is None:
             has_target = torch.zeros(B, dtype=torch.bool, device=device)
         target_repr = self.target_encoder(target_input_ids, target_attention_mask, has_target)
-
         assay_repr = self.assay_aggregator(assay_text_repr, target_repr, has_target)
         assay_repr, proto_assignments = self.prototype_layer(assay_repr)
-
         # Interaction & logits
         interaction_features = torch.cat([
             compound_repr,
@@ -817,11 +723,9 @@ class AssayCompoundModelWithConfidencePU(nn.Module):
         ], dim=-1)
         interaction_repr = self.interaction(interaction_features)
         logits = self.classifier(interaction_repr).squeeze(-1)
-
         # Contrastive projection (InfoNCE 용)
         compound_proj = self.contrastive_proj(compound_repr)   # (B, 128)
         assay_proj = self.contrastive_proj(assay_repr)         # (B, 128)
-
         outputs: Dict[str, torch.Tensor] = {
             'logits': logits,
             'probs': torch.sigmoid(logits),
@@ -831,7 +735,6 @@ class AssayCompoundModelWithConfidencePU(nn.Module):
             'assay_proj': assay_proj,
             'proto_assignments': proto_assignments
         }
-
         if original_labels is not None:
             loss_outputs = self._compute_loss(
                 logits=logits,
@@ -845,9 +748,7 @@ class AssayCompoundModelWithConfidencePU(nn.Module):
                 device=device
             )
             outputs.update(loss_outputs)
-
         return outputs
-
     def _compute_loss(
         self,
         logits: torch.Tensor,
@@ -860,9 +761,7 @@ class AssayCompoundModelWithConfidencePU(nn.Module):
         multi_dose_tested: Optional[torch.Tensor],
         device: torch.device
     ) -> Dict[str, torch.Tensor]:
-
         B = logits.size(0)
-
         if assay_types is None:
             assay_types = torch.full((B,), AssayType.UNKNOWN, device=device)
         if has_activity_value is None:
@@ -871,7 +770,6 @@ class AssayCompoundModelWithConfidencePU(nn.Module):
             activity_values = torch.zeros(B, device=device)
         if multi_dose_tested is None:
             multi_dose_tested = torch.zeros(B, dtype=torch.bool, device=device)
-
         # Activity value가 있는 샘플의 soft label
         activity_soft_labels, activity_confidence = self.activity_encoder(
             activity_values, has_activity_value
@@ -942,7 +840,6 @@ class AssayCompoundDataset(torch.utils.data.Dataset):
     메타데이터를 포함한 Dataset
     - 길이 N인 리스트들로 초기화
     """
-
     def __init__(
         self,
         compound_smiles: List[str],
@@ -1004,15 +901,12 @@ class AssayCompoundDataset(torch.utils.data.Dataset):
         has_val = (val is not None)
         item['has_activity_value'] = torch.tensor(has_val, dtype=torch.bool)
         item['activity_value'] = torch.tensor(float(val) if has_val else 0.0, dtype=torch.float)
-
         # multi-dose
         item['multi_dose_tested'] = torch.tensor(bool(self.multi_dose_info[idx]), dtype=torch.bool)
-
         # target
         tgt_seq = self.target_sequences[idx]
         has_target = tgt_seq is not None
         item['has_target'] = torch.tensor(has_target, dtype=torch.bool)
-
         # Tokenize compound
         c_tok = self.compound_tokenizer(
             self.compound_smiles[idx],
@@ -1023,7 +917,6 @@ class AssayCompoundDataset(torch.utils.data.Dataset):
         )
         item['compound_input_ids'] = c_tok['input_ids'].squeeze(0)
         item['compound_attention_mask'] = c_tok['attention_mask'].squeeze(0)
-
         # Tokenize assay
         a_tok = self.assay_tokenizer(
             self.assay_descriptions[idx],
@@ -1034,7 +927,6 @@ class AssayCompoundDataset(torch.utils.data.Dataset):
         )
         item['assay_input_ids'] = a_tok['input_ids'].squeeze(0)
         item['assay_attention_mask'] = a_tok['attention_mask'].squeeze(0)
-
         # Tokenize target if present
         if has_target:
             t_tok = self.target_tokenizer(
@@ -1046,7 +938,6 @@ class AssayCompoundDataset(torch.utils.data.Dataset):
             )
             item['target_input_ids'] = t_tok['input_ids'].squeeze(0)
             item['target_attention_mask'] = t_tok['attention_mask'].squeeze(0)
-
         return item
 
 
@@ -1058,7 +949,6 @@ class ConfidencePUTrainer:
     """
     Confidence-weighted Semi-PU + InfoNCE contrastive Training
     """
-
     def __init__(self, model: AssayCompoundModelWithConfidencePU, config: ModelConfig):
         self.model = model
         self.config = config
@@ -1079,19 +969,15 @@ class ConfidencePUTrainer:
             {'params': model.activity_encoder.parameters(), 'lr': 1e-4},
             {'params': model.contrastive_proj.parameters(), 'lr': 1e-4},
         ], weight_decay=0.01)
-
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer, T_0=5, T_mult=2
         )
-
     def train_epoch(self, dataloader: DataLoader, device) -> Dict[str, float]:
         self.model.train()
         total_metrics: Dict[str, float] = {}
         num_batches = 0
-
         for batch in dataloader:
             batch = self._move_to_device(batch, device)
-
             outputs = self.model(
                 compound_input_ids=batch['compound_input_ids'],
                 compound_attention_mask=batch['compound_attention_mask'],
@@ -1107,15 +993,12 @@ class ConfidencePUTrainer:
                 target_attention_mask=batch.get('target_attention_mask'),
                 has_target=batch['has_target'],
             )
-
             # 1) Semi-PU loss
             semi_pu_loss = outputs['loss']
-
             # 2) Contrastive InfoNCE loss (assay-aware)
             labels = batch['original_label']
             assay_ids = batch['assay_id']
             valid_mask = labels != OriginalLabel.UNSPECIFIED
-
             if valid_mask.sum() > 1:  # 최소 2개 이상 있어야 contrastive 의미 있음
                 contr_loss = self.contrastive_loss_fn(
                     compound_repr=outputs['compound_proj'][valid_mask],
@@ -1125,29 +1008,22 @@ class ConfidencePUTrainer:
                 )
             else:
                 contr_loss = torch.tensor(0.0, device=device)
-
             total_loss = semi_pu_loss + self.contrastive_weight * contr_loss
-
             self.optimizer.zero_grad()
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
-
             # metrics 정리
             metrics = outputs.get('metrics', {}).copy()
             metrics['semi_pu_loss'] = float(semi_pu_loss.item())
             metrics['contrastive_loss'] = float(contr_loss.item())
             metrics['total_loss'] = float(total_loss.item())
-
             for k, v in metrics.items():
                 if isinstance(v, (int, float)):
                     total_metrics[k] = total_metrics.get(k, 0.0) + v
             num_batches += 1
-
         self.scheduler.step()
-
         return {k: v / num_batches for k, v in total_metrics.items()} if num_batches > 0 else {}
-
     def _move_to_device(self, batch, device):
         return {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
@@ -1165,10 +1041,8 @@ class ConfidencePUEvaluator:
     - Binary: POSITIVE vs (NEGATIVE + INCONCLUSIVE)
     - UNSPECIFIED는 평가에서 제외
     """
-
     def __init__(self):
         pass
-
     @torch.no_grad()
     def evaluate(
         self,
@@ -1178,19 +1052,16 @@ class ConfidencePUEvaluator:
         per_assay: bool = False,
     ) -> Dict[str, float]:
         model.eval()
-
         all_scores = []
         all_binary_labels = []
         all_original_labels = []
         all_assay_types = []
         all_assay_ids = []
-
         for batch in dataloader:
             batch = {
                 k: v.to(device) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
-
             outputs = model(
                 compound_input_ids=batch["compound_input_ids"],
                 compound_attention_mask=batch["compound_attention_mask"],
@@ -1206,42 +1077,33 @@ class ConfidencePUEvaluator:
                 target_attention_mask=batch.get("target_attention_mask"),
                 has_target=batch["has_target"],
             )
-
             probs = outputs["probs"].detach().cpu().numpy()  # P(positive)
             labels = batch["original_label"].detach().cpu().numpy()
             assay_types = batch["assay_type"].detach().cpu().numpy()
             assay_ids = batch["assay_id"].detach().cpu().numpy()
-
             # UNSPECIFIED 제외
             mask_valid = labels != OriginalLabel.UNSPECIFIED
             if mask_valid.sum() == 0:
                 continue
-
             probs = probs[mask_valid]
             labels = labels[mask_valid]
             assay_types = assay_types[mask_valid]
             assay_ids = assay_ids[mask_valid]
-
             # Binary label: POSITIVE vs (NEGATIVE + INCONCLUSIVE)
             bin_labels = (labels == OriginalLabel.POSITIVE).astype(np.int64)
-
             all_scores.append(probs)
             all_binary_labels.append(bin_labels)
             all_original_labels.append(labels)
             all_assay_types.append(assay_types)
             all_assay_ids.append(assay_ids)
-
         if len(all_scores) == 0:
             return {"note": "no valid samples for evaluation"}
-
         all_scores = np.concatenate(all_scores, axis=0)
         all_binary_labels = np.concatenate(all_binary_labels, axis=0)
         all_original_labels = np.concatenate(all_original_labels, axis=0)
         all_assay_types = np.concatenate(all_assay_types, axis=0)
         all_assay_ids = np.concatenate(all_assay_ids, axis=0)
-
         metrics: Dict[str, float] = {}
-
         # 전체 binary metrics
         try:
             metrics["roc_auc"] = roc_auc_score(all_binary_labels, all_scores)
@@ -1251,7 +1113,6 @@ class ConfidencePUEvaluator:
             metrics["average_precision"] = average_precision_score(all_binary_labels, all_scores)
         except ValueError:
             metrics["average_precision"] = float("nan")
-
         # threshold 0.5
         preds = (all_scores >= 0.5).astype(np.int64)
         metrics["accuracy"] = accuracy_score(all_binary_labels, preds)
@@ -1259,11 +1120,9 @@ class ConfidencePUEvaluator:
         metrics["macro_f1"] = f1_score(all_binary_labels, preds, average="macro")
         metrics["pos_ratio_pred"] = float(preds.mean())
         metrics["pos_ratio_true"] = float(all_binary_labels.mean())
-
         # Confirmatory / Screening subset
         conf_mask = all_assay_types == AssayType.CONFIRMATORY
         scr_mask = all_assay_types == AssayType.SCREENING
-
         if conf_mask.sum() > 10:
             preds_c = preds[conf_mask]
             labels_c = all_binary_labels[conf_ma_]()_

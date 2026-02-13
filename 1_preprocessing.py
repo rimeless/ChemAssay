@@ -3620,6 +3620,24 @@ sim_matrix = smiles_similarity_matrix(smiles_list)
 print("Time taken:", time.time() - st)
 
 
+
+##
+
+bios = biodf2.loc[:,['AID','CID','Activity Outcome','Activity Value']]
+
+ebios = bios.dropna()
+
+eaids = list(set(ebios.AID))
+
+vvs = []
+for i, eaid in enumerate(eaids):
+    if i%100==0:print(i)
+    edf = ebios[ebios.AID==eaid]
+    av = np.mean(edf[edf['Activity Outcome']=='Active']['Activity Value'])
+    iv = np.mean(edf[edf['Activity Outcome']=='Inactive']['Activity Value'])
+    incv = np.mean(edf[edf['Activity Outcome']=='Inconclusive']['Activity Value'])
+    vvs.append([eaid, av, iv, incv])
+
 # from rdkit import Chem, DataStructs
 # from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 # import numpy as np
@@ -3642,3 +3660,26 @@ print("Time taken:", time.time() - st)
 #     for i in range(n):
 #         sim_matrix[i] = DataStructs.BulkTanimotoSimilarity(fps[i], fps)
 #     return sim_matrix
+
+def af2bind(outputs, mask_sidechains=True, seed=0):
+  pair_A = outputs["representations"]["pair"][:-20,-20:]
+  pair_B = outputs["representations"]["pair"][-20:,:-20].swapaxes(0,1)
+  pair_A = pair_A.reshape(pair_A.shape[0],-1)
+  pair_B = pair_B.reshape(pair_B.shape[0],-1)
+  x = np.concatenate([pair_A,pair_B],-1)
+  # get params
+  if mask_sidechains:
+    model_type = f"split_nosc_pair_A_split_nosc_pair_B_{seed}"
+  else:
+    model_type = f"split_pair_A_split_pair_B_{seed}"
+  with open(f"params/attempt_7_2k_lam0-03/{model_type}.pickle","rb") as handle:
+    params_ = pickle.load(handle)
+  params_ = dict(**params_["~"], **params_["linear"])
+  p = jax.tree_util.tree_map(lambda x:np.asarray(x), params_)
+  # get predictions
+  x = (x - p["mean"]) / p["std"]
+  x = (x * p["w"][:,0]) + (p["b"] / x.shape[-1])
+  p_bind_aa = x.reshape(x.shape[0],2,20,-1).sum((1,3))
+  p_bind = sigmoid(p_bind_aa.sum(-1))
+  return {"p_bind":p_bind, "p_bind_aa":p_bind_aa}
+     
